@@ -417,7 +417,7 @@ fun HomeScreen(vm: Vm) {
                 }
             }
             Spacer(Modifier.width(10.dp))
-            Chip(if (vm.listView) "▦ Griglia" else "☰ Lista", false) { vm.setListView(!vm.listView) }
+            Chip(if (vm.listView) "▦ Griglia" else "☰ Lista", false) { vm.changeListView(!vm.listView) }
         }
         Text(
             "Tieni premuto OK su un titolo per aggiungerlo ai preferiti ♥",
@@ -652,13 +652,13 @@ fun PlaybackSection(vm: Vm) {
         listOf("native" to "Integrato (Native)", "vlc" to "VLC"),
         vm.playerPref,
         "VLC deve essere installato sul Fire Stick. Con VLC non ci sono zapping dei canali né episodio successivo automatico."
-    ) { vm.setPlayerPref(it) }
+    ) { vm.changePlayerPref(it) }
     OptionRow(
         "Formato di uscita",
         listOf("default" to "Predefinito", "m3u8" to "M3U8", "ts" to "TS"),
         vm.output,
         "Cambia l'output del link Xtream e ricarica la lista. Non vale per liste caricate da file."
-    ) { vm.setOutput(it) }
+    ) { vm.changeOutput(it) }
     OptionRow(
         "Lingua audio preferita",
         listOf("auto" to "Automatica", "it" to "Italiano", "en" to "Inglese"),
@@ -674,12 +674,12 @@ fun PlaybackSection(vm: Vm) {
         "Dimensione sottotitoli",
         listOf("s" to "Piccola", "m" to "Media", "l" to "Grande"),
         vm.subSize
-    ) { vm.setSubSize(it) }
+    ) { vm.changeSubSize(it) }
     OptionRow(
         "Sfondo sottotitoli",
         listOf("none" to "Trasparente", "dark" to "Scuro"),
         vm.subBg
-    ) { vm.setSubBg(it) }
+    ) { vm.changeSubBg(it) }
 }
 
 @Composable
@@ -689,12 +689,12 @@ fun AppearanceSection(vm: Vm) {
         listOf("az" to "A → Z", "za" to "Z → A", "provider" to "Ordine provider", "views" to "Più visti"),
         vm.sort,
         "«Ordine provider» di solito mostra prima i più recenti. «Più visti» conta le tue visioni su questo dispositivo."
-    ) { vm.setSort(it) }
+    ) { vm.changeSort(it) }
     OptionRow(
         "Vista",
         listOf("grid" to "Griglia", "list" to "Lista (colonna)"),
         if (vm.listView) "list" else "grid"
-    ) { vm.setListView(it == "list") }
+    ) { vm.changeListView(it == "list") }
 }
 
 @Composable

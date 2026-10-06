@@ -145,21 +145,21 @@ class Vm(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------- preferenze ----------
-    fun setOutput(v: String) {
+    fun changeOutput(v: String) {
         output = v
         prefs.edit().putString("output", v).apply()
         if (url.isNotBlank()) refresh()
     }
-    fun setPlayerPref(v: String) { playerPref = v; prefs.edit().putString("player", v).apply() }
+    fun changePlayerPref(v: String) { playerPref = v; prefs.edit().putString("player", v).apply() }
     fun setAudio(v: String) { audioLang = v; prefs.edit().putString("audio", v).apply() }
     fun setSub(v: String) { subLang = v; prefs.edit().putString("sub", v).apply() }
-    fun setSubSize(v: String) { subSize = v; prefs.edit().putString("subSize", v).apply() }
-    fun setSubBg(v: String) { subBg = v; prefs.edit().putString("subBg", v).apply() }
-    fun setSort(v: String) { sort = v; prefs.edit().putString("sort", v).apply() }
-    fun setListView(b: Boolean) { listView = b; prefs.edit().putBoolean("listView", b).apply() }
+    fun changeSubSize(v: String) { subSize = v; prefs.edit().putString("subSize", v).apply() }
+    fun changeSubBg(v: String) { subBg = v; prefs.edit().putString("subBg", v).apply() }
+    fun changeSort(v: String) { sort = v; prefs.edit().putString("sort", v).apply() }
+    fun changeListView(b: Boolean) { listView = b; prefs.edit().putBoolean("listView", b).apply() }
     fun cycleSort() {
         val order = listOf("provider", "az", "za", "views")
-        setSort(order[(order.indexOf(sort) + 1) % order.size])
+        changeSort(order[(order.indexOf(sort) + 1) % order.size])
     }
 
     // ---------- recenti / preferiti / contatori / posizioni ----------

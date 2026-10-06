@@ -619,12 +619,12 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
                         }
                 P_STYLE -> listOf(
                     PRow("Dimensione", header = true),
-                    PRow("Piccola", vm.subSize == "s") { vm.setSubSize("s") },
-                    PRow("Media", vm.subSize == "m") { vm.setSubSize("m") },
-                    PRow("Grande", vm.subSize == "l") { vm.setSubSize("l") },
+                    PRow("Piccola", vm.subSize == "s") { vm.changeSubSize("s") },
+                    PRow("Media", vm.subSize == "m") { vm.changeSubSize("m") },
+                    PRow("Grande", vm.subSize == "l") { vm.changeSubSize("l") },
                     PRow("Sfondo", header = true),
-                    PRow("Trasparente", vm.subBg == "none") { vm.setSubBg("none") },
-                    PRow("Scuro", vm.subBg == "dark") { vm.setSubBg("dark") }
+                    PRow("Trasparente", vm.subBg == "none") { vm.changeSubBg("none") },
+                    PRow("Scuro", vm.subBg == "dark") { vm.changeSubBg("dark") }
                 )
                 else -> listOf(
                     PRow("Player integrato (in uso)", true) { panel = P_NONE },
