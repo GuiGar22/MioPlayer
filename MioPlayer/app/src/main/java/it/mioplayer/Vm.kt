@@ -337,7 +337,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
                 http.newCall(req).execute().use { r ->
                     val body = r.body
                     if (!r.isSuccessful || body == null) { status = "Errore server: ${r.code}"; return@use }
-                    val parsed = body.byteStream().bufferedReader(Charsets.UTF_8, 65536).useLines { lines ->
+                    val parsed = java.io.BufferedReader(java.io.InputStreamReader(body.byteStream(), Charsets.UTF_8), 65536).useLines { lines ->
                         M3u.parse(lines) { n -> progressCount = n }
                     }
                     if (parsed.isEmpty()) {
