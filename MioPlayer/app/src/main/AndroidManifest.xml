@@ -4,9 +4,11 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <application
-        android:label="Mio Player"
-        android:icon="@drawable/ic_launcher"
-        android:banner="@drawable/banner"
+        android:name=".GgApp"
+        android:label="GGPLAY"
+        android:largeHeap="true"
+        android:icon="@drawable/gg_icon"
+        android:banner="@drawable/gg_banner"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
         <activity android:name=".MainActivity" android:exported="true"
