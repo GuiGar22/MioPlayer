@@ -14,9 +14,19 @@ jobs:
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.7' }
-      - run: gradle assembleDebug --no-daemon
+      - name: Build debug
+        run: gradle assembleDebug --no-daemon
         working-directory: MioPlayer
+      - name: Build release (piu veloce)
+        run: gradle assembleRelease --no-daemon
+        working-directory: MioPlayer
+        continue-on-error: true
       - uses: actions/upload-artifact@v4
         with:
-          name: MioPlayer-apk
+          name: GGPLAY-debug
           path: MioPlayer/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GGPLAY-release
+          path: MioPlayer/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: warn
