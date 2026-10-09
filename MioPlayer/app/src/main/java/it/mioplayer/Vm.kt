@@ -80,6 +80,10 @@ class Vm(app: Application) : AndroidViewModel(app) {
     var screen by mutableStateOf<Screen>(Screen.Home)
     var recents by mutableStateOf(loadList("recents"))
     var favs by mutableStateOf(loadList("favs"))
+    var favKeys by mutableStateOf(favs.map { it.url }.toSet())
+    var favTs by mutableStateOf(loadFavTs())
+    var favSort by mutableStateOf(prefs.getString("favSort", "manual") ?: "manual")
+    var favMode by mutableStateOf(false)
     var playCounts by mutableStateOf(loadCounts())
     var positions by mutableStateOf(loadPositions())
     var tab by mutableStateOf(0)
@@ -107,7 +111,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
     var accountLoading by mutableStateOf(false)
 
     init {
-        tab = if (recents.isNotEmpty()) 0 else 2
+        tab = if (recents.isNotEmpty()) 0 else 1
         startup(true)
     }
 
@@ -220,11 +224,52 @@ class Vm(app: Application) : AndroidViewModel(app) {
         prefs.edit().remove("counts").apply()
     }
 
-    fun isFav(i: Item) = favs.any { it.url == i.url }
+    fun isFav(i: Item) = favKeys.contains(i.url)
+
+    private fun loadFavTs(): Map<String, Long> = try {
+        val o = JSONObject(prefs.getString("favts", "{}"))
+        o.keys().asSequence().associateWith { o.getLong(it) }
+    } catch (e: Exception) { emptyMap() }
 
     fun toggleFav(i: Item) {
-        favs = if (isFav(i)) favs.filter { it.url != i.url } else favs + i
+        val was = favKeys.contains(i.url)
+        favs = if (was) favs.filter { it.url != i.url } else favs + i
+        favKeys = favs.map { it.url }.toSet()
+        favTs = if (was) favTs - i.url else favTs + (i.url to System.currentTimeMillis())
         saveList("favs", favs)
+        prefs.edit().putString("favts", JSONObject(favTs).toString()).apply()
+    }
+
+    fun toast(msg: String) {
+        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
+    }
+
+    fun toggleFavToast(i: Item) {
+        val was = isFav(i)
+        toggleFav(i)
+        toast(if (was) "Rimosso dai preferiti" else "♥ Aggiunto ai preferiti")
+    }
+
+    /** Sposta un preferito su/giù tra quelli della stessa categoria (ordine manuale). */
+    fun moveFav(url: String, delta: Int) {
+        val list = favs.toMutableList()
+        val i = list.indexOfFirst { it.url == url }
+        if (i < 0 || delta == 0) return
+        val t = list[i].type
+        var j = i + delta
+        while (j in list.indices && list[j].type != t) j += delta
+        if (j !in list.indices) return
+        val tmp = list[i]
+        list[i] = list[j]
+        list[j] = tmp
+        favs = list
+        saveList("favs", favs)
+    }
+
+    fun changeFavSort(v: String) { favSort = v; prefs.edit().putString("favSort", v).apply() }
+    fun cycleFavSort() {
+        val order = listOf("manual", "recent", "old", "az", "za")
+        changeFavSort(order[(order.indexOf(favSort) + 1) % order.size])
     }
 
     // ---------- navigazione e riproduzione ----------

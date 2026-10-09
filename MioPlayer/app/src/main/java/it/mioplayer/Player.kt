@@ -44,7 +44,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
@@ -60,6 +65,7 @@ private const val P_SUBS = 2
 private const val P_STYLE = 3
 private const val P_SEASONS = 4
 private const val P_PLAYER = 5
+private const val P_CHANNELS = 6
 
 private class PRow(
     val text: String,
@@ -195,7 +201,7 @@ private fun GuideBar(vm: Vm, list: List<Item>, idx: Int, epg: List<EpgEntry>) {
                 }
             }
         }
-        Text("▲ ▼ cambia canale   •   Menu ♥ preferito", color = Cyan, fontSize = 14.sp)
+        Text("▲ ▼ cambia canale   •   ◀ elenco canali   •   Menu ♥ preferito", color = Cyan, fontSize = 14.sp)
     }
 }
 
@@ -302,6 +308,61 @@ private fun SeasonPanel(
     }
 }
 
+/** Elenco dei canali in sovrapposizione a sinistra: il canale continua a vedersi sotto. */
+@Composable
+private fun ChannelPanel(vm: Vm, list: List<Item>, curIdx: Int, onPick: (Int) -> Unit) {
+    val state = rememberLazyListState()
+    val curFr = remember { FocusRequester() }
+    Row(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.fillMaxHeight().fillMaxWidth(0.38f).background(Color(0xDD0B0F1A)).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("Canali", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("${list.size} canali  ·  OK per cambiare  ·  Indietro per chiudere", color = Color.Gray, fontSize = 13.sp)
+            LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(list.size) { i ->
+                    val m = list[i]
+                    val now = i == curIdx
+                    Focusable(
+                        (if (now) Modifier.focusRequester(curFr) else Modifier).fillMaxWidth(),
+                        onClick = { onPick(i) }
+                    ) { f ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .background(if (now) Color(0x44FFC107) else if (f) Color(0xFF2A3350) else Color(0x99151B2E))
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier.width(72.dp).height(40.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF1E2640)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (m.logo != null) AsyncImage(
+                                    m.logo, null, contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxSize().padding(2.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                m.name, color = Color.White, fontSize = 17.sp, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                            )
+                            if (vm.isFav(m)) Text("♥", color = Pink, fontSize = 18.sp)
+                            if (now) Text("  ▶", color = Color(0xFFFFC107), fontSize = 16.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        state.scrollToItem(maxOf(0, curIdx - 3))
+        delay(80)
+        try { curFr.requestFocus() } catch (_: Exception) {}
+    }
+}
+
 @Composable
 fun PlayerScreen(vm: Vm, s: Screen.Player) {
     val ctx = LocalContext.current
@@ -314,7 +375,15 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
     val curItem = rememberUpdatedState(item)
     val curIdx = rememberUpdatedState(idx)
     val player = remember {
-        ExoPlayer.Builder(ctx).build().apply {
+        val load = if (live) DefaultLoadControl.Builder().setBufferDurationsMs(3000, 20000, 800, 1500).build()
+        else DefaultLoadControl.Builder().setBufferDurationsMs(15000, 50000, 1500, 3000).build()
+        val http = DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(8000)
+            .setReadTimeoutMs(8000)
+            .setAllowCrossProtocolRedirects(true)
+        val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx, http))
+            .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(8))
+        ExoPlayer.Builder(ctx).setLoadControl(load).setMediaSourceFactory(sources).build().apply {
             playWhenReady = true
             val b = trackSelectionParameters.buildUpon()
             if (vm.audioLang != "auto") b.setPreferredAudioLanguage(vm.audioLang)
@@ -335,6 +404,13 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
     var dur by remember { mutableStateOf(0L) }
     var playing by remember { mutableStateOf(false) }
     var epg by remember { mutableStateOf<List<EpgEntry>>(emptyList()) }
+    var retry by remember { mutableStateOf(0) }
+    var retryAt by remember { mutableStateOf(0L) }
+    var stallSince by remember { mutableStateOf(0L) }
+    var stableSince by remember { mutableStateOf(0L) }
+    var lastPos by remember { mutableStateOf(-1L) }
+    var lastAdv by remember { mutableStateOf(System.currentTimeMillis()) }
+    var reconn by remember { mutableStateOf(false) }
     val rootFr = remember { FocusRequester() }
     val playFr = remember { FocusRequester() }
     val panelFr = remember { FocusRequester() }
@@ -342,16 +418,37 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
     val seasons = remember(list) { list.map { it.season }.distinct().sorted() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // Riconnette lo stesso titolo (i canali ripartono dal vivo, i film dal punto in cui erano)
+    fun reconnect() {
+        val cur = curItem.value
+        val at = if (cur.type == Type.LIVE) 0L else player.currentPosition
+        reconn = true
+        stallSince = 0L
+        lastAdv = System.currentTimeMillis()
+        player.setMediaItem(MediaItem.fromUri(cur.url), at)
+        player.prepare()
+        player.play()
+    }
+
     DisposableEffect(player) {
         val l = object : Player.Listener {
-            override fun onPlayerError(e: PlaybackException) { error = "Impossibile riprodurre (${e.errorCodeName})" }
+            override fun onPlayerError(e: PlaybackException) {
+                val isLive = curItem.value.type == Type.LIVE
+                retry += 1
+                if (isLive || retry <= 3) {
+                    retryAt = System.currentTimeMillis() + minOf(1000L * retry, 8000L)
+                    reconn = true
+                } else {
+                    error = "Impossibile riprodurre (${e.errorCodeName})"
+                }
+            }
             override fun onTracksChanged(t: Tracks) { tracks = t }
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_ENDED && list[curIdx.value].type == Type.SERIE && curIdx.value < list.size - 1) {
                     idx = curIdx.value + 1
                 }
-                if (state == Player.STATE_READY) error = null
+                if (state == Player.STATE_READY) { error = null; reconn = false }
             }
         }
         player.addListener(l)
@@ -385,10 +482,18 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
         if (prev != null && prev.type != Type.LIVE && prev.url != item.url) vm.savePos(prev, pos, dur, true)
         prevItem[0] = item
         error = null
+        retry = 0
+        retryAt = 0L
+        stallSince = 0L
+        stableSince = 0L
+        reconn = false
+        lastPos = -1L
+        lastAdv = System.currentTimeMillis()
         val saved = if (live) null else vm.posOf(item)
         val startMs = if (saved != null && saved.pos > 15_000 && (saved.dur <= 0 || saved.pos < saved.dur * 0.95)) saved.pos else 0L
         player.setMediaItem(MediaItem.fromUri(item.url), startMs)
         player.prepare()
+        if (live) delay(4000)
         vm.saveLast(item)
     }
     LaunchedEffect(idx) {
@@ -399,9 +504,30 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
     }
     LaunchedEffect(player) {
         while (true) {
-            pos = player.currentPosition
+            val now = System.currentTimeMillis()
+            val position = player.currentPosition
+            pos = position
             dur = player.duration.coerceAtLeast(0L)
             playing = player.isPlaying
+            if (position != lastPos) { lastPos = position; lastAdv = now }
+            val st = player.playbackState
+            val stalled = error == null && player.playWhenReady &&
+                st != Player.STATE_ENDED && st != Player.STATE_IDLE &&
+                (st == Player.STATE_BUFFERING || now - lastAdv > 6000L)
+            if (stalled && retryAt == 0L) {
+                if (stallSince == 0L) stallSince = now
+                val limit = if (curItem.value.type == Type.LIVE) 8000L else 25000L
+                if (now - stallSince > limit) { retry += 1; reconnect() }
+            } else if (!stalled) {
+                stallSince = 0L
+            }
+            if (!stalled && player.isPlaying) {
+                if (stableSince == 0L) stableSince = now
+                else if (now - stableSince > 15000L && retry > 0) retry = 0
+            } else {
+                stableSince = 0L
+            }
+            if (retryAt > 0L && now >= retryAt) { retryAt = 0L; reconnect() }
             delay(500)
         }
     }
@@ -419,7 +545,7 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
         try {
             if (panel == P_NONE) {
                 if (hud && !live) playFr.requestFocus() else rootFr.requestFocus()
-            } else if (panel != P_SEASONS) {
+            } else if (panel != P_SEASONS && panel != P_CHANNELS) {
                 panelFr.requestFocus()
             }
         } catch (_: Exception) {}
@@ -462,7 +588,8 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
                     when (e.key) {
                         Key.DirectionUp, Key.ChannelUp -> { idx = (idx + 1) % list.size; true }
                         Key.DirectionDown, Key.ChannelDown -> { idx = (idx - 1 + list.size) % list.size; true }
-                        Key.DirectionCenter, Key.Enter, Key.DirectionLeft, Key.DirectionRight -> true
+                        Key.DirectionLeft -> { panel = P_CHANNELS; true }
+                        Key.DirectionCenter, Key.Enter, Key.DirectionRight -> true
                         else -> false
                     }
                 } else if (hud) {
@@ -513,7 +640,13 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
             },
             modifier = Modifier.fillMaxSize()
         )
-        if (buffering && error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Cyan)
+        if ((buffering || reconn) && error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Cyan)
+        if (reconn && error == null) {
+            Text(
+                "Riconnessione…", color = Color.White, fontSize = 20.sp,
+                modifier = Modifier.align(Alignment.Center).padding(top = 110.dp)
+            )
+        }
         error?.let {
             Text(it, color = Color.White, fontSize = 22.sp, modifier = Modifier.align(Alignment.Center))
         }
@@ -601,6 +734,14 @@ fun PlayerScreen(vm: Vm, s: Screen.Player) {
                 onSeason = { panelSeason = it },
                 onPick = { i -> idx = i; panel = P_NONE; tick++ },
                 onClose = { panel = P_NONE }
+            )
+        }
+
+        // Elenco canali (a sinistra, il canale continua a vedersi)
+        if (panel == P_CHANNELS) {
+            ChannelPanel(
+                vm = vm, list = list, curIdx = idx,
+                onPick = { i -> idx = i; panel = P_NONE; tick++ }
             )
         }
 

@@ -40,6 +40,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.unit.Dp
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -86,6 +94,43 @@ private fun orderItems(
     }
 }
 
+private fun favSortLabel(s: String) = when (s) {
+    "recent" -> "Più recenti"
+    "old" -> "Più vecchi"
+    "az" -> "A → Z"
+    "za" -> "Z → A"
+    else -> "Mio ordine"
+}
+
+private fun orderFavs(list: List<Item>, q: String, mode: String, ts: Map<String, Long>): List<Item> {
+    val f = list.filter { q.isEmpty() || it.name.contains(q, true) }
+    return when (mode) {
+        "recent" -> f.withIndex()
+            .sortedWith(compareByDescending<IndexedValue<Item>> { ts[it.value.url] ?: 0L }.thenByDescending { it.index })
+            .map { it.value }
+        "old" -> f.withIndex()
+            .sortedWith(compareBy<IndexedValue<Item>> { ts[it.value.url] ?: 0L }.thenBy { it.index })
+            .map { it.value }
+        "az" -> f.sortedWith(byName)
+        "za" -> f.sortedWith(byName.reversed())
+        else -> f
+    }
+}
+
+private fun favKey(list: List<Item>): (Int) -> Any = { i -> list[i].url }
+
+/** Con un preferito "afferrato": su/giù lo spostano, le altre frecce vengono ignorate. */
+private fun grabKey(e: KeyEvent, vm: Vm, url: String): Boolean {
+    val arrow = e.key == Key.DirectionUp || e.key == Key.DirectionDown ||
+        e.key == Key.DirectionLeft || e.key == Key.DirectionRight
+    if (!arrow) return false
+    if (e.type == KeyEventType.KeyDown) {
+        if (e.key == Key.DirectionUp) vm.moveFav(url, -1)
+        else if (e.key == Key.DirectionDown) vm.moveFav(url, 1)
+    }
+    return true
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Focusable(
@@ -94,6 +139,7 @@ fun Focusable(
     onLongClick: (() -> Unit)? = null,
     shape: Shape = RoundedCornerShape(14.dp),
     grow: Boolean = true,
+    onFocus: ((Boolean) -> Unit)? = null,
     content: @Composable BoxScope.(Boolean) -> Unit
 ) {
     var f by remember { mutableStateOf(false) }
@@ -102,7 +148,7 @@ fun Focusable(
         modifier.scale(sc)
             .border(3.dp, if (f) Cyan else Color.Transparent, shape)
             .clip(shape)
-            .onFocusChanged { f = it.isFocused }
+            .onFocusChanged { f = it.isFocused; onFocus?.invoke(it.isFocused) }
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) { content(f) }
 }
@@ -169,9 +215,9 @@ fun TvTextField(
 }
 
 @Composable
-fun ItemCard(vm: Vm, m: Item, onClick: () -> Unit) {
+fun ItemCard(vm: Vm, m: Item, onFocus: (Boolean) -> Unit, onClick: () -> Unit) {
     val live = m.type == Type.LIVE
-    Focusable(onClick = onClick, onLongClick = { vm.toggleFav(m) }) {
+    Focusable(onClick = onClick, onFocus = onFocus) {
         Column(Modifier.fillMaxWidth().background(CardBg)) {
             Box(
                 Modifier.fillMaxWidth().height(if (live) 110.dp else 230.dp).background(Color(0xFF1E2640)),
@@ -197,13 +243,24 @@ fun ItemCard(vm: Vm, m: Item, onClick: () -> Unit) {
 }
 
 @Composable
-fun ItemRow(vm: Vm, m: Item, onClick: () -> Unit) {
+fun ItemRow(
+    vm: Vm,
+    m: Item,
+    onFocus: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    number: Int? = null,
+    grabbed: Boolean = false,
+    onClick: () -> Unit
+) {
     val live = m.type == Type.LIVE
-    Focusable(Modifier.fillMaxWidth(), onClick = onClick, onLongClick = { vm.toggleFav(m) }) { f ->
+    Focusable(modifier.fillMaxWidth(), onClick = onClick, onFocus = onFocus) { f ->
         Row(
-            Modifier.fillMaxWidth().background(if (f) Color(0xFF2A3350) else CardBg).padding(10.dp),
+            Modifier.fillMaxWidth()
+                .background(if (grabbed) Color(0x66FFC107) else if (f) Color(0xFF2A3350) else CardBg)
+                .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (number != null) Text("$number.", color = Color.Gray, fontSize = 16.sp, modifier = Modifier.width(44.dp))
             Box(
                 Modifier.width(if (live) 80.dp else 56.dp).height(if (live) 45.dp else 80.dp)
                     .clip(RoundedCornerShape(6.dp)).background(Color(0xFF1E2640)),
@@ -220,7 +277,8 @@ fun ItemRow(vm: Vm, m: Item, onClick: () -> Unit) {
                 Text(m.name, color = Color.White, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (m.group.isNotEmpty()) Text(m.group, color = Color.Gray, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (vm.isFav(m)) Text("♥", color = Pink, fontSize = 22.sp)
+            if (grabbed) Text("⇅ sposta con ▲ ▼", color = Color(0xFFFFC107), fontSize = 14.sp)
+            if (vm.isFav(m)) Text("  ♥", color = Pink, fontSize = 22.sp)
         }
     }
 }
@@ -278,6 +336,55 @@ fun ResumeCard(vm: Vm, item: Item, modifier: Modifier = Modifier) {
 }
 
 @Composable
+fun QrCode(text: String, dim: Dp) {
+    val matrix = remember(text) {
+        try {
+            QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, mapOf(EncodeHintType.MARGIN to 2))
+        } catch (e: Exception) { null }
+    }
+    Canvas(Modifier.size(dim).clip(RoundedCornerShape(8.dp)).background(Color.White)) {
+        val m = matrix ?: return@Canvas
+        val n = m.width
+        val cell = this.size.width / n
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                if (m.get(x, y)) drawRect(Color.Black, Offset(x * cell, y * cell), Size(cell + 0.6f, cell + 0.6f))
+            }
+        }
+    }
+}
+
+/** QR code + indirizzo per caricare la lista dal telefono (il server resta attivo solo finché è visibile). */
+@Composable
+fun PhoneUpload(vm: Vm, onLink: (String) -> Unit = {}) {
+    val ip = remember { UploadServer.localIp() }
+    var ok by remember { mutableStateOf(true) }
+    DisposableEffect(Unit) {
+        val server = UploadServer(8080, { vm.saveUrlAndRefresh(it); onLink(it) }, { vm.importText(it) })
+        ok = try { server.start(); true } catch (_: Exception) { false }
+        onDispose { server.stop() }
+    }
+    val addr = if (ip != null && ok) "http://$ip:8080" else null
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (addr != null) {
+            QrCode(addr, 210.dp)
+            Spacer(Modifier.width(26.dp))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Aggiorna la lista dal telefono", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            if (addr != null) {
+                Text("1. Inquadra il QR con la fotocamera del telefono", fontSize = 16.sp, color = Color.LightGray)
+                Text("2. Incolla il link della lista (o scegli il file .m3u)", fontSize = 16.sp, color = Color.LightGray)
+                Text("3. Premi «Invia alla TV»", fontSize = 16.sp, color = Color.LightGray)
+                Text("Telefono e TV sulla stessa Wi-Fi  ·  $addr", fontSize = 14.sp, color = Cyan)
+            } else {
+                Text("Collega la TV alla Wi-Fi per usare il QR", fontSize = 16.sp, color = Color.LightGray)
+            }
+        }
+    }
+}
+
+@Composable
 fun SplashScreen(vm: Vm) {
     Box(
         Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Bg, Color(0xFF1B1442)))),
@@ -320,9 +427,14 @@ fun ExitDialog(onStay: () -> Unit, onExit: () -> Unit) {
 @Composable
 fun HomeScreen(vm: Vm) {
     val tab = vm.tab
-    val type = Type.values().getOrNull(tab - 2)
-    val base = remember(vm.index, vm.recents, vm.favs, tab) {
-        when (tab) { 0 -> vm.recents; 1 -> vm.favs; else -> vm.index.cards(type!!) }
+    val type = Type.values().getOrNull(tab - 1)
+    val favMode = vm.favMode && type != null
+    val base = remember(vm.index, vm.recents, vm.favs, tab, favMode) {
+        when {
+            type == null -> vm.recents
+            favMode -> vm.favs.filter { it.type == type }
+            else -> vm.index.cards(type!!)
+        }
     }
     val rawGroups = remember(vm.index, tab) {
         if (type == null) emptyList<Pair<String, List<Item>>>() else vm.index.groups(type)
@@ -334,12 +446,14 @@ fun HomeScreen(vm: Vm) {
             else -> rawGroups
         }
     }
-    val sortable = type != null
     val q = vm.query
     val grp = vm.group
     val sort = vm.sort
     val counts = vm.playCounts
-    val ordered: List<Item> = if (base.size <= 3000) {
+    val sortable = type != null && !favMode
+    val ordered: List<Item> = if (favMode) {
+        remember(base, q, vm.favSort, vm.favTs) { orderFavs(base, q, vm.favSort, vm.favTs) }
+    } else if (base.size <= 3000) {
         remember(base, grp, q, sort, counts, sortable) { orderItems(base, grp, q, sort, counts, sortable) }
     } else {
         produceState(emptyList<Item>(), base, grp, q, sort, counts, sortable) {
@@ -347,16 +461,54 @@ fun HomeScreen(vm: Vm) {
         }.value
     }
     var confirmClear by remember(tab) { mutableStateOf(false) }
+    var editing by remember(tab, favMode) { mutableStateOf(false) }
+    var grab by remember { mutableStateOf<String?>(null) }
+    var focused by remember { mutableStateOf<Item?>(null) }
+    var menuDownAt by remember { mutableStateOf(0L) }
+    var menuFired by remember { mutableStateOf(false) }
+    BackHandler(favMode) { vm.favMode = false }
     BackHandler(vm.group != null) { vm.group = null }
-    val tabs = listOf("Recenti", "♥ Preferiti") + Type.values().map { it.label }
+    BackHandler(grab != null) { grab = null }
+    val tabs = listOf("Recenti") + Type.values().map { it.label }
+    val listMode = vm.listView || (favMode && editing)
+    val favLabel = when (type) {
+        Type.LIVE -> "♥ Canali TV preferiti"
+        Type.FILM -> "♥ Film preferiti"
+        else -> "♥ Serie TV preferiti"
+    }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 24.dp)) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 24.dp)
+            .onPreviewKeyEvent { e ->
+                // Tieni premuto Menu (≥ 1 secondo) su un titolo: aggiunge/toglie dai preferiti senza aprirlo
+                if (e.key != Key.Menu) return@onPreviewKeyEvent false
+                val now = System.currentTimeMillis()
+                if (e.type == KeyEventType.KeyDown) {
+                    if (e.nativeKeyEvent.repeatCount == 0) {
+                        menuDownAt = now
+                        menuFired = false
+                    } else if (!menuFired && menuDownAt > 0L && now - menuDownAt >= 1000L) {
+                        menuFired = true
+                        val f = focused
+                        if (f != null) vm.toggleFavToast(f)
+                    }
+                } else if (e.type == KeyEventType.KeyUp) {
+                    if (!menuFired && menuDownAt > 0L && now - menuDownAt >= 1000L) {
+                        menuFired = true
+                        val f = focused
+                        if (f != null) vm.toggleFavToast(f)
+                    }
+                    menuDownAt = 0L
+                }
+                true
+            }
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("GG", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Cyan)
             Text("PLAY", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
             Spacer(Modifier.width(16.dp))
             tabs.forEachIndexed { i, t ->
-                Chip(t, tab == i) { vm.tab = i; vm.group = null; vm.query = "" }
+                Chip(t, tab == i) { vm.tab = i; vm.group = null; vm.query = ""; vm.favMode = false }
                 Spacer(Modifier.width(8.dp))
             }
             Spacer(Modifier.weight(1f))
@@ -387,10 +539,10 @@ fun HomeScreen(vm: Vm) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Nessuna lista caricata", fontSize = 28.sp, color = Color.White)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Apri le impostazioni ⚙ per aggiungere il tuo link M3U", fontSize = 18.sp, color = Color.Gray)
-                    Spacer(Modifier.height(20.dp))
-                    Chip("Apri impostazioni", true) { vm.navigate(Screen.Settings) }
+                    Spacer(Modifier.height(18.dp))
+                    PhoneUpload(vm)
+                    Spacer(Modifier.height(18.dp))
+                    Chip("Apri impostazioni", false) { vm.navigate(Screen.Settings) }
                 }
             }
             return@Column
@@ -408,7 +560,17 @@ fun HomeScreen(vm: Vm) {
             TvTextField(vm.query, { vm.query = it }, "Cerca…", Modifier.weight(1f), icon = true)
             if (type != null) {
                 Spacer(Modifier.width(10.dp))
-                Chip("Ordina: ${sortLabel(vm.sort)}", false) { vm.cycleSort() }
+                Chip(favLabel, favMode) { vm.favMode = !vm.favMode; vm.group = null }
+                Spacer(Modifier.width(10.dp))
+                if (favMode) {
+                    Chip("Ordine: ${favSortLabel(vm.favSort)}", false) { vm.cycleFavSort() }
+                } else {
+                    Chip("Ordina: ${sortLabel(vm.sort)}", false) { vm.cycleSort() }
+                }
+                if (favMode && vm.favSort == "manual") {
+                    Spacer(Modifier.width(10.dp))
+                    Chip(if (editing) "✓ Fine modifica" else "Modifica ordine", editing) { editing = !editing; grab = null }
+                }
             }
             if (tab == 0 && vm.recents.isNotEmpty()) {
                 Spacer(Modifier.width(10.dp))
@@ -420,22 +582,25 @@ fun HomeScreen(vm: Vm) {
             Chip(if (vm.listView) "▦ Griglia" else "☰ Lista", false) { vm.changeListView(!vm.listView) }
         }
         Text(
-            "Tieni premuto OK su un titolo per aggiungerlo ai preferiti ♥",
+            if (favMode && editing) "Premi OK su un titolo per afferrarlo, poi ▲ ▼ per spostarlo; OK per lasciarlo"
+            else "Tieni premuto Menu (≡) per 1 secondo su un titolo per aggiungerlo ai preferiti ♥",
             fontSize = 13.sp, color = Color.Gray, modifier = Modifier.padding(top = 6.dp, bottom = 10.dp)
         )
 
+        val inGroups = type != null && !favMode && vm.group == null && vm.query.isBlank()
         if (base.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    when (tab) {
-                        0 -> "Qui compariranno gli ultimi titoli guardati"
-                        1 -> "Nessun preferito: tieni premuto OK su un titolo"
-                        else -> if (vm.items.isEmpty()) "Lista non caricata: apri ⚙ > Lista e premi «Aggiorna da internet»"
-                        else "Nessun elemento in questa sezione"
-                    }, fontSize = 20.sp, color = Color.Gray
+                    when {
+                        tab == 0 -> "Qui compariranno gli ultimi titoli guardati"
+                        favMode -> "Nessun preferito in questa categoria: tieni premuto Menu (≡) per 1 secondo su un titolo"
+                        vm.items.isEmpty() -> "Lista non caricata: apri ⚙ > Lista e aggiornamento"
+                        else -> "Nessun elemento in questa sezione"
+                    },
+                    fontSize = 20.sp, color = Color.Gray
                 )
             }
-        } else if (type != null && vm.group == null && vm.query.isBlank()) {
+        } else if (inGroups) {
             if (vm.listView) {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(groups.size) { i ->
@@ -474,10 +639,38 @@ fun HomeScreen(vm: Vm) {
                 }
             }
         } else {
-            val openAt = { i: Int -> if (type == null) vm.open(listOf(ordered[i]), 0) else vm.open(ordered, i) }
-            if (vm.listView) {
+            // Canali: la lista di riproduzione contiene tutti i canali visibili, così su/giù cambiano canale
+            val openAt = { i: Int ->
+                val e = ordered[i]
+                if (e.type == Type.LIVE && !e.isSeriesCard) {
+                    val lives = ordered.filter { it.type == Type.LIVE }
+                    vm.play(lives, lives.indexOfFirst { it.url == e.url }.coerceAtLeast(0))
+                } else {
+                    vm.open(listOf(e), 0)
+                }
+            }
+            val onFocusOf: (Item, Boolean) -> Unit = { m, got ->
+                if (got) { focused = m } else if (focused === m) { focused = null }
+            }
+            if (listMode) {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(ordered.size) { i -> ItemRow(vm, ordered[i]) { openAt(i) } }
+                    items(ordered.size, key = if (favMode) favKey(ordered) else null) { i ->
+                        val m = ordered[i]
+                        val isGrab = editing && grab == m.url
+                        ItemRow(
+                            vm, m,
+                            onFocus = { got -> onFocusOf(m, got) },
+                            modifier = if (isGrab) Modifier.onPreviewKeyEvent { e -> grabKey(e, vm, m.url) } else Modifier,
+                            number = if (favMode && editing) i + 1 else null,
+                            grabbed = isGrab
+                        ) {
+                            if (favMode && editing) {
+                                grab = if (isGrab) null else m.url
+                            } else {
+                                openAt(i)
+                            }
+                        }
+                    }
                 }
             } else {
                 LazyVerticalGrid(
@@ -485,7 +678,10 @@ fun HomeScreen(vm: Vm) {
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(ordered.size) { i -> ItemCard(vm, ordered[i]) { openAt(i) } }
+                    items(ordered.size) { i ->
+                        val m = ordered[i]
+                        ItemCard(vm, m, onFocus = { got -> onFocusOf(m, got) }) { openAt(i) }
+                    }
                 }
             }
         }
@@ -619,15 +815,9 @@ fun GeneralSection(vm: Vm, showPw: Boolean, onTogglePw: () -> Unit) {
 }
 
 @Composable
-fun ListSection(vm: Vm, ip: String?, link: String, onLink: (String) -> Unit) {
-    InfoCard("📱 Carica dal telefono (più comodo)") {
-        Text(
-            if (ip != null) "Con il telefono sulla stessa Wi-Fi apri:  http://$ip:8080" else "Collega la TV alla Wi-Fi",
-            fontSize = 20.sp, color = Cyan
-        )
-        Text("Incolla il link oppure scegli il file .m3u", fontSize = 14.sp, color = Color.Gray)
-    }
-    Text("Link della lista", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+fun ListSection(vm: Vm, link: String, onLink: (String) -> Unit) {
+    InfoCard("QR code per il telefono") { PhoneUpload(vm, onLink) }
+    Text("Oppure scrivi il link con il telecomando", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
     TvTextField(link, onLink, "Premi OK e scrivi il link M3U", Modifier.fillMaxWidth())
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Chip("Salva e carica", true) { vm.saveUrlAndRefresh(link) }
@@ -699,16 +889,9 @@ fun AppearanceSection(vm: Vm) {
 
 @Composable
 fun SettingsScreen(vm: Vm) {
-    var sec by remember { mutableStateOf(0) }
+    var sec by remember { mutableStateOf(if (vm.items.isEmpty()) 1 else 0) }
     var link by remember { mutableStateOf(vm.url) }
     var showPw by remember { mutableStateOf(false) }
-    val ip = remember { UploadServer.localIp() }
-
-    DisposableEffect(Unit) {
-        val server = UploadServer(8080, { vm.saveUrlAndRefresh(it); link = it }, { vm.importText(it) })
-        try { server.start() } catch (_: Exception) {}
-        onDispose { server.stop() }
-    }
     LaunchedEffect(Unit) { vm.loadAccount() }
 
     Row(Modifier.fillMaxSize().padding(40.dp)) {
@@ -728,7 +911,7 @@ fun SettingsScreen(vm: Vm) {
         ) {
             when (sec) {
                 0 -> GeneralSection(vm, showPw) { showPw = !showPw }
-                1 -> ListSection(vm, ip, link) { link = it }
+                1 -> ListSection(vm, link) { link = it }
                 2 -> PlaybackSection(vm)
                 else -> AppearanceSection(vm)
             }
