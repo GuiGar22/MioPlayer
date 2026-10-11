@@ -40,6 +40,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -170,7 +174,7 @@ fun Chip(
     }
 }
 
-/** Campo di testo "da TV": si apre (e mostra la tastiera) SOLO quando premi OK. */
+/** Campo di testo "da TV": premendo OK si apre una finestra con la tastiera; il testo si applica con Conferma. */
 @Composable
 fun TvTextField(
     value: String,
@@ -179,38 +183,59 @@ fun TvTextField(
     modifier: Modifier = Modifier,
     icon: Boolean = false
 ) {
-    var editing by remember { mutableStateOf(false) }
-    var had by remember { mutableStateOf(false) }
-    val fr = remember { FocusRequester() }
-    BackHandler(editing) { editing = false }
+    var open by remember { mutableStateOf(false) }
+    Focusable(modifier, onClick = { open = true }) { f ->
+        Row(
+            Modifier.fillMaxWidth()
+                .background(if (f) Color(0xFF2A3350) else CardBg)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (icon) { Icon(Icons.Default.Search, null, tint = Color.Gray); Spacer(Modifier.width(10.dp)) }
+            Text(
+                if (value.isEmpty()) placeholder else value,
+                color = if (value.isEmpty()) Color.Gray else Color.White,
+                fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+    if (open) {
+        TextEntryDialog(
+            initial = value, title = placeholder,
+            onDone = { onValueChange(it); open = false },
+            onCancel = { open = false }
+        )
+    }
+}
 
-    if (!editing) {
-        Focusable(modifier, onClick = { editing = true }) { f ->
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(if (f) Color(0xFF2A3350) else CardBg)
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (icon) { Icon(Icons.Default.Search, null, tint = Color.Gray); Spacer(Modifier.width(10.dp)) }
-                Text(
-                    if (value.isEmpty()) placeholder else value,
-                    color = if (value.isEmpty()) Color.Gray else Color.White,
-                    fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun TextEntryDialog(initial: String, title: String, onDone: (String) -> Unit, onCancel: () -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    val fr = remember { FocusRequester() }
+    val kb = LocalSoftwareKeyboardController.current
+    Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(
+            Modifier.width(760.dp).clip(RoundedCornerShape(18.dp)).background(CardBg).padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            Text(title, color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = text, onValueChange = { text = it }, singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onDone(text) }, onDone = { onDone(text) }),
+                modifier = Modifier.fillMaxWidth().focusRequester(fr)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Chip("Conferma", true) { onDone(text) }
+                Chip("Cancella testo", false) { text = "" }
+                Chip("Annulla", false) { onCancel() }
+            }
+            LaunchedEffect(Unit) {
+                delay(150)
+                try { fr.requestFocus(); kb?.show() } catch (_: Exception) {}
             }
         }
-    } else {
-        OutlinedTextField(
-            value = value, onValueChange = onValueChange, singleLine = true,
-            placeholder = { Text(placeholder) },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { editing = false }),
-            modifier = modifier.focusRequester(fr).onFocusChanged {
-                if (it.isFocused || it.hasFocus) had = true else if (had) editing = false
-            }
-        )
-        LaunchedEffect(Unit) { had = false; fr.requestFocus() }
     }
 }
 
@@ -447,7 +472,7 @@ fun HomeScreen(vm: Vm) {
         }
     }
     val q = vm.query
-    val grp = vm.group
+    val grp = if (vm.query.isBlank()) vm.group else null
     val sort = vm.sort
     val counts = vm.playCounts
     val sortable = type != null && !favMode
@@ -468,6 +493,7 @@ fun HomeScreen(vm: Vm) {
     var menuFired by remember { mutableStateOf(false) }
     BackHandler(favMode) { vm.favMode = false }
     BackHandler(vm.group != null) { vm.group = null }
+    BackHandler(vm.query.isNotBlank()) { vm.query = "" }
     BackHandler(grab != null) { grab = null }
     val tabs = listOf("Recenti") + Type.values().map { it.label }
     val listMode = vm.listView || (favMode && editing)
