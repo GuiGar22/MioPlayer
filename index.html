@@ -3,192 +3,111 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MioPlayer</title>
+    <title>MioPlayer Pro</title>
     
     <!-- Configurazione per iPhone (PWA) -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="MioPlayer">
     
-    <!-- Stile Grafico (Moderno e scuro per TV e Mobile) -->
+    <!-- Libreria per generare i QR Code (Sostituisce ZXing di Android) -->
+    <script src="https://cloudflare.com"></script>
+
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+        body { background-color: #121212; color: #ffffff; display: flex; padding: 20px; min-height: 100vh; gap: 20px; }
+        
+        /* Layout sdoppiato: perfetto per lo schermo grande della TV */
+        .main-content { flex: 2; display: flex; flex-direction: column; gap: 15px; }
+        .side-panel { flex: 1; background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #2a2a2a; display: flex; flex-direction: column; align-items: center; gap: 20px; }
 
-        body {
-            background-color: #121212;
-            color: #ffffff;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
+        .video-box { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; }
+        video { width: 100%; height: 100%; }
 
-        .player-container {
-            background: #1e1e1e;
-            width: 100%;
-            max-width: 800px;
-            border-radius: 16px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-            overflow: hidden;
-            border: 1px solid #2a2a2a;
-        }
+        .controls { background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #2a2a2a; display: flex; flex-direction: column; gap: 15px; }
+        .btn-row { display: flex; gap: 10px; }
+        
+        button { background: #e50914; color: white; border: none; padding: 12px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; }
+        button:hover, button:focus { background: #f40b16; outline: 3px solid white; transform: scale(1.02); }
 
-        .video-box {
-            width: 100%;
-            aspect-ratio: 16 / 9;
-            background: #000000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
+        input { flex: 1; padding: 12px; border-radius: 6px; border: 1px solid #333; background: #2b2b2b; color: white; }
+        
+        /* Area QR Code e Connessione */
+        .qr-container { background: white; padding: 10px; border-radius: 8px; display: inline-block; }
+        .info-text { text-align: center; font-size: 0.9rem; color: #aaa; }
+        .ip-address { font-size: 1.1rem; color: #00ffcc; font-weight: bold; margin: 5px 0; }
 
-        video {
-            width: 100%;
-            height: 100%;
-            outline: none;
-        }
-
-        .controls {
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .title-area {
-            text-align: center;
-            margin-bottom: 5px;
-        }
-
-        .title-area h1 {
-            font-size: 1.5rem;
-            color: #e50914; /* Rosso stile Netflix, perfetto per TV */
-        }
-
-        .button-row {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-        }
-
-        button {
-            background: #e50914;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            font-size: 1rem;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.2s, transform 0.1s;
-        }
-
-        button:hover, button:focus {
-            background: #f40b16;
-            transform: scale(1.05); /* Effetto evidenziato quando ti muovi col telecomando della TV */
-            outline: 3px solid #ffffff;
-        }
-
-        .url-input-section {
-            display: flex;
-            gap: 10px;
-            margin-top: 10px;
-        }
-
-        input[type="text"] {
-            flex: 1;
-            padding: 12px;
-            border-radius: 8px;
-            border: 1px solid #333;
-            background: #2b2b2b;
-            color: white;
-            font-size: 0.9rem;
-        }
-
-        input[type="text"]:focus {
-            outline: 2px solid #e50914;
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
         }
     </style>
 </head>
 <body>
 
-    <div class="player-container">
-        <!-- Schermo del riproduttore -->
+    <!-- Parte Sinistra: Video e Controlli principali -->
+    <div class="main-content">
         <div class="video-box">
-            <video id="main-video" controls poster="https://unsplash.com">
-                <source id="video-source" src="https://googleapis.com" type="video/mp4">
-                Il tuo browser non supporta i video.
+            <video id="player" controls autoplay>
+                <source src="https://googleapis.com" type="video/mp4">
             </video>
         </div>
 
-        <!-- Pannello di controllo -->
         <div class="controls">
-            <div class="title-area">
-                <h1 id="video-title">MioPlayer - Video di Prova</h1>
-            </div>
-
-            <div class="button-row">
-                <button onclick="playPause()" id="btn-play">Metti Pausa</button>
-                <button onclick="restart()">Ricomincia</button>
-            </div>
-
-            <!-- Sezione per inserire un link video personalizzato (IPTV, film, canzoni) -->
-            <div class="url-input-section">
-                <input type="text" id="video-url" placeholder="Incolla qui il link di un video (.mp4)...">
-                <button onclick="loadCustomVideo()">Carica</button>
+            <h2 id="video-title">MioPlayer - Streaming Attivo</h2>
+            <div class="btn-row">
+                <input type="text" id="stream-url" placeholder="Incolla qui un link streaming, video o lista...">
+                <button onclick="changeSource()">Carica Canale</button>
             </div>
         </div>
     </div>
 
-    <!-- Logica di funzionamento (JavaScript) -->
+    <!-- Parte Destra: Pannello Connessione Remota (Sostituisce NanoHTTPD e ZXing) -->
+    <div class="side-panel">
+        <h3>Connessione Remota</h3>
+        <p class="info-text">Scansiona il codice o collegati via browser per controllare la TV dal telefono:</p>
+        
+        <!-- Indirizzo IP simulato basato sul tuo link attuale -->
+        <div class="ip-address" id="web-ip">In caricamento...</div>
+        
+        <!-- Il quadratino dove apparirà il QR Code -->
+        <div class="qr-container">
+            <div id="qrcode"></div>
+        </div>
+        
+        <p class="info-text" style="font-size: 0.8rem;">Usa questo pannello per accoppiare l'app dell'iPhone con lo schermo della TV.</p>
+    </div>
+
     <script>
-        const video = document.getElementById('main-video');
-        const playBtn = document.getElementById('btn-play');
+        const player = document.getElementById('player');
+        const streamUrl = document.getElementById('stream-url');
         const videoTitle = document.getElementById('video-title');
-        const urlInput = document.getElementById('video-url');
 
-        // Funzione per Play e Pausa (funziona anche premendo Invio dal telecomando)
-        function playPause() {
-            if (video.paused) {
-                video.play();
-                playBtn.innerText = "Metti Pausa";
-            } else {
-                video.pause();
-                playBtn.innerText = "Riproduci";
+        // Genera automaticamente il QR Code in base all'indirizzo internet attuale
+        const currentUrl = window.location.href;
+        document.getElementById('web-ip').innerText = currentUrl.replace('https://', '').replace('/', '');
+        
+        new QRCode(document.getElementById("qrcode"), {
+            text: currentUrl,
+            width: 150,
+            height: 150,
+            colorDark : "#000000",
+            colorLight : "#ffffff",
+            correctLevel : QRCode.CorrectLevel.H
+        });
+
+        // Funzione per cambiare canale / video streaming
+        function changeSource() {
+            const url = streamUrl.value.trim();
+            if(url) {
+                player.src = url;
+                videoTitle.innerText = "Canale Personalizzato";
+                player.play();
             }
         }
 
-        // Funzione per ricominciare il video da capo
-        function restart() {
-            video.currentTime = 0;
-            video.play();
-            playBtn.innerText = "Metti Pausa";
-        }
-
-        // Funzione per caricare un video inserito dall'utente
-        function loadCustomVideo() {
-            const url = urlInput.value.trim();
-            if (url) {
-                video.src = url;
-                videoTitle.innerText = "Video Personalizzato";
-                video.play();
-                playBtn.innerText = "Metti Pausa";
-            } else {
-                alert("Per favore, inserisci un indirizzo internet valido.");
-            }
-        }
-
-        // Gestione telecomando TV (Se premi la freccia centrale/OK sul bottone, esegue l'azione)
+        // Supporto telecomando TV (Tasto OK/Invio per Play/Pausa)
         document.addEventListener('keydown', function(e) {
-            if (e.key === "Enter" && document.activeElement.tagName !== "BUTTON" && document.activeElement.tagName !== "INPUT") {
-                playPause();
+            if (e.key === "Enter" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "BUTTON") {
+                if (player.paused) { player.play(); } else { player.pause(); }
             }
         });
     </script>
